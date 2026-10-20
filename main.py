@@ -313,30 +313,68 @@ class LiveDashboard:
         self.f_act.append(f_act[2])
         self.f_des.append(f_des)
         
+        # Also populate Panel 3 (Normal Force vs Deflection Depth)
+        deflection = max(0.0, 0.285 - pos_act[2]) if f_act[2] > 0.05 else 0.0
+        self.depths.append(deflection)
+        self.f_mat.append(f_act[2])
+        
         # Update every M=10 simulation steps without dropping physics frame rate
         now = time.time()
         if self.step_count % self.M == 0 and (now - self.last_update > 0.03):
+            # Panel 1: XY Path
             self.line_act_path.set_data(self.x_act, self.y_act)
             self.line_ref_path.set_data(self.x_des, self.y_des)
             self.ax_path.relim()
             self.ax_path.autoscale_view()
             
+            # Panel 2: Force Tracking
             self.line_meas_f.set_data(self.t_data, self.f_act)
             self.line_target_f.set_data(self.t_data, self.f_des)
             self.ax_force.relim()
             self.ax_force.autoscale_view()
             
+            # Panel 3: Force vs Deflection
+            self.line_probe_curve.set_data(self.depths, self.f_mat)
+            self.ax_mat.relim()
+            self.ax_mat.autoscale_view()
+            
             self.fig.canvas.draw_idle()
             self.fig.canvas.flush_events()
             self.last_update = now
 
-    def update_material(self, depth, f_act, k_hat=None):
+    def update_material(self, depth, f_act, t=None, pos=None, target_xy=None, k_hat=None):
         self.step_count += 1
         self.depths.append(depth)
         self.f_mat.append(f_act)
         
+        if t is not None:
+            self.t_data.append(t)
+            self.f_act.append(f_act)
+            self.f_des.append(5.0)
+        if pos is not None:
+            self.x_act.append(pos[0])
+            self.y_act.append(pos[1])
+            if target_xy is not None:
+                self.x_des.append(target_xy[0])
+                self.y_des.append(target_xy[1])
+        
         now = time.time()
         if (self.step_count % self.M == 0 and (now - self.last_update > 0.03)) or k_hat is not None:
+            # Panel 1: XY Position on probe pad
+            if self.x_act:
+                self.line_act_path.set_data(self.x_act, self.y_act)
+                if self.x_des:
+                    self.line_ref_path.set_data(self.x_des, self.y_des)
+                self.ax_path.relim()
+                self.ax_path.autoscale_view()
+            
+            # Panel 2: Contact Force vs Time
+            if self.t_data:
+                self.line_meas_f.set_data(self.t_data, self.f_act)
+                self.ax_force.relim()
+                self.ax_force.autoscale_view()
+            
+            # Panel 3: Force vs Penetration Depth (F vs delta)
             self.line_probe_curve.set_data(self.depths, self.f_mat)
             self.line_probe_pts.set_data(self.depths, self.f_mat)
             if k_hat is not None and len(self.depths) > 0:
@@ -346,9 +384,11 @@ class LiveDashboard:
                 self.ax_mat.legend(loc="upper left", frameon=False, fontsize=8)
             self.ax_mat.relim()
             self.ax_mat.autoscale_view()
+            
             self.fig.canvas.draw_idle()
             self.fig.canvas.flush_events()
             self.last_update = now
+
             
     def close(self):
         plt.ioff()
@@ -616,7 +656,7 @@ def run_writing_task(world, ctrl, controller_mode, f_desired, gui=False, save_di
 
                 p.stepSimulation(physicsClientId=world.cid)
                 world.arm.clamp_joint_velocities()
-                if gui and step % 2 == 0:
+                if (gui or live) and step % 2 == 0:
                     time.sleep(0.001)
 
                 tool_pos, _, _, _ = world.arm.get_tool_pose()
@@ -631,10 +671,10 @@ def run_writing_task(world, ctrl, controller_mode, f_desired, gui=False, save_di
         prev_kind = kind
     
     logger.stop_timer()
-    if dashboard: dashboard.close()
-    if gui:
-        print("[GUI] Writing completed! Holding view for 4 seconds...")
+    if gui or live:
+        print("[Dashboard] Completed! Holding view for 4 seconds...")
         time.sleep(4.0)
+    if dashboard: dashboard.close()
 
     os.makedirs(save_dir, exist_ok=True)
     arr = logger.arrays()
@@ -692,6 +732,8 @@ def probe_material(world, ctrl, pad_id, pad_top_z, xy, save_dir, tag, fixed_pene
         world.arm.apply_joint_torques(tau)
         p.stepSimulation(physicsClientId=world.cid)
         world.arm.clamp_joint_velocities()
+        if live and step % 2 == 0:
+            time.sleep(0.001)
 
         tool_pos, _, _, _ = world.arm.get_tool_pose()
         force, torque, _ = get_contact_wrench(world.cid, world.arm.tool_id, [pad_id], tool_pos)
@@ -699,7 +741,7 @@ def probe_material(world, ctrl, pad_id, pad_top_z, xy, save_dir, tag, fixed_pene
         depth = max(0.0, just_touching_z - tool_pos[2])
         logger.record(t, tool_pos, pos_des, force=force, force_des=0.0, torque=torque)
         if dashboard:
-            dashboard.update_material(depth, force[2])
+            dashboard.update_material(depth, force[2], t=t, pos=tool_pos, target_xy=xy)
         t += DT
 
     arr = logger.arrays()
@@ -735,8 +777,8 @@ def probe_material(world, ctrl, pad_id, pad_top_z, xy, save_dir, tag, fixed_pene
         K_hat = 0.0
 
     if dashboard:
-        dashboard.update_material(depths[-1], forces[-1], k_hat=K_hat)
-        time.sleep(1)
+        dashboard.update_material(depths[-1], forces[-1], t=t, pos=tool_pos, target_xy=xy, k_hat=K_hat)
+        time.sleep(2.0)
         dashboard.close()
 
     os.makedirs(save_dir, exist_ok=True)
