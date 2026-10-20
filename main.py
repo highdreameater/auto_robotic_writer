@@ -907,6 +907,40 @@ def run_writing_task(world, ctrl, controller_mode, f_desired, gui=False, save_di
     plot_force_tracking(arr, os.path.join(save_dir, f"{tag}_force_tracking.png"), title=f"{tag}: Force Tracking While Writing")
     plot_xy_path(arr, os.path.join(save_dir, f"{tag}_xy_path.png"), title=f"{tag}: Traced Path (top-down)")
     
+    if cursive:
+        fourier_plot_path = os.path.join(save_dir, f"fourier_{controller_mode}_cursive_tracking.png")
+        fig_c, (ax_xy, ax_f) = plt.subplots(1, 2, figsize=(11, 4.5))
+        contact = arr["force_des"] > 0
+        pos_contact = arr["pos"].copy()
+        pos_contact[~contact, :] = np.nan
+        ax_xy.plot(pos_contact[:, 0], pos_contact[:, 1], color=NAVY, lw=1.8, label="Traced Cursive Path")
+        start_indices = np.where(contact)[0]
+        if len(start_indices) > 0:
+            start_idx = start_indices[0]
+            end_idx = start_indices[-1]
+            ax_xy.scatter(*pos_contact[start_idx, :2], color=TEAL, s=45, label="Start", zorder=3)
+            ax_xy.scatter(*pos_contact[end_idx, :2], color=RED, s=45, label="End", zorder=3)
+        ax_xy.set_aspect("equal")
+        ax_xy.set_xlabel("x (m)")
+        ax_xy.set_ylabel("y (m)")
+        ax_xy.set_title(f"Fourier Cursive Path ({controller_mode.capitalize()})", fontsize=11, weight="bold", color=NAVY)
+        ax_xy.grid(True, ls=":", alpha=0.5)
+        ax_xy.legend(frameon=False, loc="upper right", fontsize=8)
+        
+        t_c = arr["t"]
+        f_meas_c = arr["force"][:, 2]
+        ax_f.plot(t_c, f_meas_c, color=RED, lw=1.5, label="Measured Fz")
+        ax_f.plot(t_c, arr["force_des"], color=GREY, ls="--", lw=1.5, label="Target 5N")
+        ax_f.set_xlabel("Time (s)")
+        ax_f.set_ylabel("Force (N)")
+        ax_f.set_title(f"5N Force Tracking (RMSE = {rmse:.3f} N, MAE = {mae:.3f} N)", fontsize=11, weight="bold", color=NAVY)
+        ax_f.grid(True, ls=":", alpha=0.5)
+        ax_f.legend(frameon=False, loc="upper right", fontsize=8)
+        
+        fig_c.tight_layout()
+        fig_c.savefig(fourier_plot_path, dpi=180, facecolor="white")
+        plt.close(fig_c)
+    
     summary = dict(
         force_tracking_rmse_N=rmse,
         force_tracking_mae_N=mae,
@@ -1042,7 +1076,8 @@ def run_part2_writing(gui=False, save_dir="outputs/part3", f_desired=F_DESIRED, 
     print("--- Part 2 (continued): Impedance Writing ---")
     world = build_world(gui=gui)
     ctrl = CartesianImpedanceController(world.arm)
-    s, _ = run_writing_task(world, ctrl, "impedance", f_desired, gui=gui, save_dir=save_dir, tag="part3_impedance", word=word, pattern=pattern, live=live, cursive=cursive)
+    tag = "cursive_impedance" if cursive else "part3_impedance"
+    s, _ = run_writing_task(world, ctrl, "impedance", f_desired, gui=gui, save_dir=save_dir, tag=tag, word=word, pattern=pattern, live=live, cursive=cursive)
     world.disconnect()
     return s
 
@@ -1050,7 +1085,8 @@ def run_part2_writing_admittance(gui=False, save_dir="outputs/part4", f_desired=
     print("--- Part 3: Admittance Writing ---")
     world = build_world(gui=gui)
     ctrl = CartesianImpedanceController(world.arm)
-    s, _ = run_writing_task(world, ctrl, "admittance", f_desired, gui=gui, save_dir=save_dir, tag="part4_admittance", word=word, pattern=pattern, live=live, cursive=cursive)
+    tag = "cursive_admittance" if cursive else "part4_admittance"
+    s, _ = run_writing_task(world, ctrl, "admittance", f_desired, gui=gui, save_dir=save_dir, tag=tag, word=word, pattern=pattern, live=live, cursive=cursive)
     world.disconnect()
     return s
 
