@@ -241,75 +241,68 @@ ADMITTANCE_NOMINAL_PENETRATION = 0.015
 # ==============================================================================
 
 class LiveDashboard:
-    def __init__(self, mode="writing"):
+    def __init__(self, mode="all"):
         """
-        TODO 7: Implement a real-time matplotlib dashboard using plt.ion().
+        TODO 7: Real-Time Visualization Dashboard (--live)
+        Initialize Matplotlib figure with 3 subplots in interactive mode (plt.ion()).
+        Pre-allocate line handles (Line2D) for reference path, actual path, force curve,
+        5N target line, probe scatter points, and linear fit line.
         """
         plt.ion()
         self.mode = mode
+        self.step_count = 0
+        self.M = 10
         self.last_update = time.time()
         
-        if mode == "writing":
-            self.t_data = []
-            self.x_act = []
-            self.y_act = []
-            self.x_des = []
-            self.y_des = []
-            self.f_act = []
-            self.f_des = []
-            
-            self.fig, (self.ax_xy, self.ax_f) = plt.subplots(1, 2, figsize=(11, 4.5))
-            self.fig.suptitle("Real-Time Control Dashboard", fontsize=13, weight="bold", color=NAVY)
-            
-            # Left: XY Traced Path
-            self.line_xy_des, = self.ax_xy.plot([], [], color=GREY, ls="--", lw=1.2, label="desired")
-            self.line_xy_act, = self.ax_xy.plot([], [], color=NAVY, lw=1.8, label="actual")
-            self.ax_xy.set_title("Traced Path (top-down)", fontsize=11)
-            self.ax_xy.set_xlabel("x (m)")
-            self.ax_xy.set_ylabel("y (m)")
-            self.ax_xy.set_aspect("equal", adjustable="datalim")
-            self.ax_xy.legend(loc="upper right", frameon=False, fontsize=9)
-            self.ax_xy.grid(True, ls=":", alpha=0.5)
-            
-            # Right: Force Tracking
-            self.line_f_des, = self.ax_f.plot([], [], color=GREY, ls="--", lw=1.2, label="desired Fz")
-            self.line_f_act, = self.ax_f.plot([], [], color=RED, lw=1.8, label="measured Fz")
-            self.ax_f.set_title("Force Tracking", fontsize=11)
-            self.ax_f.set_xlabel("Time (s)")
-            self.ax_f.set_ylabel("Force (N)")
-            self.ax_f.legend(loc="upper right", frameon=False, fontsize=9)
-            self.ax_f.grid(True, ls=":", alpha=0.5)
-            
-            plt.tight_layout()
-            try:
-                self.fig.show()
-                self.fig.canvas.flush_events()
-            except Exception:
-                pass
-                
-        elif mode == "material":
-            self.depths = []
-            self.f_act = []
-            
-            self.fig, self.ax = plt.subplots(figsize=(6, 4.5))
-            self.fig.suptitle("Real-Time Material Loading Curve", fontsize=13, weight="bold", color=NAVY)
-            
-            self.line_fd, = self.ax.plot([], [], color=RED, lw=2.0, label="measured force")
-            self.line_fit, = self.ax.plot([], [], color=GREY, ls="--", lw=1.5, label="stiffness fit")
-            self.ax.set_title("Force vs. Penetration Depth", fontsize=11)
-            self.ax.set_xlabel("Penetration Depth (m)")
-            self.ax.set_ylabel("Normal Contact Force (N)")
-            self.ax.legend(loc="upper left", frameon=False, fontsize=9)
-            self.ax.grid(True, ls=":", alpha=0.5)
-            
-            plt.tight_layout()
-            try:
-                self.fig.show()
-                self.fig.canvas.flush_events()
-            except Exception:
-                pass
+        # Data stores
+        self.t_data = []
+        self.x_act, self.y_act = [], []
+        self.x_des, self.y_des = [], []
+        self.f_act, self.f_des = [], []
+        self.depths, self.f_mat = [], []
+        
+        # 3 Subplots: Panel 1 (Path), Panel 2 (Force Tracking), Panel 3 (Material Loading)
+        self.fig, (self.ax_path, self.ax_force, self.ax_mat) = plt.subplots(1, 3, figsize=(15, 4.5))
+        self.fig.suptitle("Real-Time Control & Identification Dashboard", fontsize=13, weight="bold", color=NAVY)
+        
+        # Panel 1: 2D Cartesian spatial path (x vs y)
+        self.line_ref_path, = self.ax_path.plot([], [], color=GREY, ls="--", lw=1.2, label="Desired")
+        self.line_act_path, = self.ax_path.plot([], [], color=NAVY, lw=1.8, label="Actual")
+        self.ax_path.set_title("2D Cartesian Spatial Path (x vs y)", fontsize=11)
+        self.ax_path.set_xlabel("x (m)")
+        self.ax_path.set_ylabel("y (m)")
+        self.ax_path.set_aspect("equal", adjustable="datalim")
+        self.ax_path.legend(loc="upper right", frameon=False, fontsize=9)
+        self.ax_path.grid(True, ls=":", alpha=0.5)
+        
+        # Panel 2: Real-time Fz tracking with horizontal 5N target line
+        self.line_target_f, = self.ax_force.plot([], [], color=GREY, ls="--", lw=1.5, label="Target 5N")
+        self.line_meas_f, = self.ax_force.plot([], [], color=RED, lw=1.8, label="Measured Fz")
+        self.ax_force.set_title("Real-Time Fz Tracking (5N)", fontsize=11)
+        self.ax_force.set_xlabel("Time (s)")
+        self.ax_force.set_ylabel("Force (N)")
+        self.ax_force.legend(loc="upper right", frameon=False, fontsize=9)
+        self.ax_force.grid(True, ls=":", alpha=0.5)
+        
+        # Panel 3: Material probe loading curve (F vs delta) with linear fit overlay
+        self.line_probe_pts, = self.ax_mat.plot([], [], 'o', color=NAVY, ms=3, alpha=0.5, label="Probe Points")
+        self.line_probe_curve, = self.ax_mat.plot([], [], color=RED, lw=2.0, label="Loading Curve")
+        self.line_probe_fit, = self.ax_mat.plot([], [], color=GREY, ls="--", lw=1.5, label="Linear Fit")
+        self.ax_mat.set_title("Material Probe Loading Curve (F vs δ)", fontsize=11)
+        self.ax_mat.set_xlabel("Penetration Depth δ (m)")
+        self.ax_mat.set_ylabel("Normal Force F (N)")
+        self.ax_mat.legend(loc="upper left", frameon=False, fontsize=9)
+        self.ax_mat.grid(True, ls=":", alpha=0.5)
+        
+        plt.tight_layout()
+        try:
+            self.fig.show()
+            self.fig.canvas.flush_events()
+        except Exception:
+            pass
 
     def update_writing(self, t, pos_act, pos_des, f_act, f_des):
+        self.step_count += 1
         self.t_data.append(t)
         if f_des > 0:
             self.x_act.append(pos_act[0]); self.y_act.append(pos_act[1])
@@ -320,41 +313,49 @@ class LiveDashboard:
         self.f_act.append(f_act[2])
         self.f_des.append(f_des)
         
+        # Update every M=10 simulation steps without dropping physics frame rate
         now = time.time()
-        if now - self.last_update > 0.05:
-            self.line_xy_act.set_data(self.x_act, self.y_act)
-            self.line_xy_des.set_data(self.x_des, self.y_des)
-            self.ax_xy.relim()
-            self.ax_xy.autoscale_view()
+        if self.step_count % self.M == 0 and (now - self.last_update > 0.03):
+            self.line_act_path.set_data(self.x_act, self.y_act)
+            self.line_ref_path.set_data(self.x_des, self.y_des)
+            self.ax_path.relim()
+            self.ax_path.autoscale_view()
             
-            self.line_f_act.set_data(self.t_data, self.f_act)
-            self.line_f_des.set_data(self.t_data, self.f_des)
-            self.ax_f.relim()
-            self.ax_f.autoscale_view()
+            self.line_meas_f.set_data(self.t_data, self.f_act)
+            self.line_target_f.set_data(self.t_data, self.f_des)
+            self.ax_force.relim()
+            self.ax_force.autoscale_view()
             
-            self.fig.canvas.draw()
+            self.fig.canvas.draw_idle()
             self.fig.canvas.flush_events()
             self.last_update = now
 
     def update_material(self, depth, f_act, k_hat=None):
+        self.step_count += 1
         self.depths.append(depth)
-        self.f_act.append(f_act)
+        self.f_mat.append(f_act)
         
         now = time.time()
-        if now - self.last_update > 0.05:
-            self.line_fd.set_data(self.depths, self.f_act)
+        if (self.step_count % self.M == 0 and (now - self.last_update > 0.03)) or k_hat is not None:
+            self.line_probe_curve.set_data(self.depths, self.f_mat)
+            self.line_probe_pts.set_data(self.depths, self.f_mat)
             if k_hat is not None and len(self.depths) > 0:
                 d_max = max(self.depths)
-                self.line_fit.set_data([0, d_max], [0, k_hat * d_max])
-            self.ax.relim()
-            self.ax.autoscale_view()
-            self.fig.canvas.draw()
+                self.line_probe_fit.set_data([0, d_max], [0, k_hat * d_max])
+                self.line_probe_fit.set_label(f"Linear Fit (K̂={k_hat:.0f} N/m)")
+                self.ax_mat.legend(loc="upper left", frameon=False, fontsize=8)
+            self.ax_mat.relim()
+            self.ax_mat.autoscale_view()
+            self.fig.canvas.draw_idle()
             self.fig.canvas.flush_events()
             self.last_update = now
             
     def close(self):
         plt.ioff()
-        plt.close(self.fig)
+        try:
+            plt.close(self.fig)
+        except Exception:
+            pass
 
 
 # ==============================================================================
