@@ -640,7 +640,7 @@ def extract_multi_stroke_fourier(text="Robot", num_harmonics=25, font_path="font
 def build_stroke_plan(world, letter_origin_xy, word=None, pattern=None, cursive=False):
     # Phase 4: Integration with Controller & Multi-Stroke Planner
     if cursive and word:
-        fourier_strokes = extract_multi_stroke_fourier(word, num_harmonics=25, center_xy=letter_origin_xy)
+        fourier_strokes = extract_multi_stroke_fourier(word, num_harmonics=22, center_xy=letter_origin_xy)
         
         # Save verification plot matching user preference
         os.makedirs("outputs", exist_ok=True)
@@ -663,7 +663,7 @@ def build_stroke_plan(world, letter_origin_xy, word=None, pattern=None, cursive=
             ds = np.linalg.norm(diffs, axis=1)
             cum_s = np.concatenate([[0], np.cumsum(ds)])
             tot_s = cum_s[-1]
-            n_wpt = max(8, min(int(tot_s / 0.0025), 25))
+            n_wpt = max(10, min(int(tot_s / 0.0016), 35))
             s_eval = np.linspace(0, tot_s, n_wpt)
             wx = np.interp(s_eval, cum_s, pos[:, 0])
             wy = np.interp(s_eval, cum_s, pos[:, 1])
