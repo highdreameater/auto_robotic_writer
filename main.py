@@ -15,6 +15,8 @@ import matplotlib
 if "--live" not in sys.argv:
     matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.textpath import TextPath
+from matplotlib.font_manager import FontProperties
 
 from utils import *
 
@@ -462,11 +464,127 @@ class PlatformSurfaceDrawer:
         self.last_pt = curr_pt
 
 
-def build_stroke_plan(world, letter_origin_xy, word=None, pattern=None):
+# ==============================================================================
+# OPTIONAL BONUS: Cursive Writing & Fourier Descriptors
+# ==============================================================================
+
+def text_to_points(text="Robot", num_points=600, font_path="fonts/DancingScript.ttf"):
+    """
+    Phase 1: Convert Text / Shape into Discrete 2D Path Points.
+    Extracts N evenly spaced coordinates (x, y) along the font contour.
+    """
+    prop = None
+    if font_path and os.path.exists(font_path):
+        prop = FontProperties(fname=font_path)
+    path = TextPath((0, 0), text, size=0.045, prop=prop)
+    vertices = path.vertices
+    
+    x = vertices[:, 0]
+    y = vertices[:, 1]
+    
+    # Scale width to fit within safe reachable table dimensions (~0.20 m)
+    w = np.max(x) - np.min(x)
+    scale = 0.20 / w if w > 0.20 else 1.0
+    x = (x - np.mean(x)) * scale
+    y = (y - np.mean(y)) * scale
+    
+    # Arc-length parameterization for uniform contour sampling
+    dx = np.diff(x)
+    dy = np.diff(y)
+    ds = np.sqrt(dx**2 + dy**2)
+    s = np.concatenate([[0], np.cumsum(ds)])
+    s_norm = s / s[-1] if s[-1] > 0 else np.linspace(0, 1, len(x))
+    
+    s_uniform = np.linspace(0, 1, num_points)
+    x_sampled = np.interp(s_uniform, s_norm, x)
+    y_sampled = np.interp(s_uniform, s_norm, y)
+    
+    return x_sampled, y_sampled
+
+def compute_fourier_coefficients(x, y, num_harmonics=25):
+    """
+    Phase 2: Compute Discrete Fourier Transform (DFT).
+    Combines coordinates into complex vector z[n] = x[n] + j*y[n] and computes C_k.
+    """
+    N = len(x)
+    z = x + 1j * y
+    
+    fft_coeffs = np.fft.fft(z) / N
+    frequencies = np.fft.fftfreq(N) * N
+    
+    mask = np.abs(frequencies) <= num_harmonics
+    C_k = fft_coeffs[mask]
+    freqs_k = frequencies[mask]
+    
+    return C_k, freqs_k
+
+def evaluate_fourier_trajectory(C_k, freqs_k, T_total=18.0, dt=1.0/240.0):
+    """
+    Phase 3: Synthesize Continuous Trajectory & Exact Velocities.
+    z_d(t) = sum( C_k * exp(j * k * omega * t) )
+    dot{z}_d(t) = sum( (j * k * omega) * C_k * exp(j * k * omega * t) )
+    Guarantees peak velocity ||v_d||_max <= 0.15 m/s by dynamically scaling T_total.
+    """
+    time_steps = np.arange(0, T_total, dt)
+    omega = 2.0 * np.pi / T_total
+    
+    pos_d = np.zeros((len(time_steps), 3))
+    vel_d = np.zeros((len(time_steps), 3))
+    
+    for idx, t in enumerate(time_steps):
+        exp_terms = np.exp(1j * freqs_k * omega * t)
+        z_val = np.sum(C_k * exp_terms)
+        dz_val = np.sum((1j * freqs_k * omega) * C_k * exp_terms)
+        
+        pos_d[idx, 0] = np.real(z_val)
+        pos_d[idx, 1] = np.imag(z_val)
+        pos_d[idx, 2] = 0.0
+        
+        vel_d[idx, 0] = np.real(dz_val)
+        vel_d[idx, 1] = np.imag(dz_val)
+        vel_d[idx, 2] = 0.0
+        
+    v_mag = np.linalg.norm(vel_d[:, :2], axis=1)
+    v_max = np.max(v_mag)
+    if v_max > 0.14:
+        # Scale T_total to ensure velocity stays <= 0.14 m/s (strictly below 0.15 m/s bound)
+        scale = v_max / 0.14
+        return evaluate_fourier_trajectory(C_k, freqs_k, T_total=T_total * scale, dt=dt)
+        
+    return pos_d, vel_d, time_steps
+
+
+def build_stroke_plan(world, letter_origin_xy, word=None, pattern=None, cursive=False):
+    # Phase 4: Integration with Controller & Multi-Stroke Planner
+    if cursive and word:
+        # Fourier Descriptor Cursive Generation
+        x_pts, y_pts = text_to_points(word, num_points=800)
+        C_k, freqs_k = compute_fourier_coefficients(x_pts, y_pts, num_harmonics=26)
+        pos_d, vel_d, _ = evaluate_fourier_trajectory(C_k, freqs_k, T_total=20.0, dt=DT)
+        
+        # Phase 5: Verification Checklist - Save plot of reconstructed x(t) vs y(t)
+        os.makedirs("outputs", exist_ok=True)
+        fig_v, ax_v = plt.subplots(figsize=(6, 3))
+        ax_v.plot(x_pts + letter_origin_xy[0], y_pts + letter_origin_xy[1], 'r--', alpha=0.35, label="Font Contour")
+        ax_v.plot(pos_d[:, 0] + letter_origin_xy[0], pos_d[:, 1] + letter_origin_xy[1], 'b-', lw=1.8, label="Fourier Reconstructed")
+        ax_v.set_aspect("equal")
+        ax_v.set_title(f"Fourier Cursive Trajectory: '{word}' (M=26)", fontsize=11, weight="bold")
+        ax_v.legend(frameon=False, fontsize=8)
+        fig_v.tight_layout()
+        fig_v.savefig("outputs/fourier_verification.png", dpi=150)
+        plt.close(fig_v)
+        
+        # State machine: AIR_TRAVEL -> APPROACH -> WRITE -> LIFT
+        first_pt = pos_d[0, :2] + letter_origin_xy
+        plan = [("up", world.pre_contact_pos[:2], first_pt)]
+        for i in range(len(pos_d) - 1):
+            p_curr = pos_d[i, :2] + letter_origin_xy
+            p_next = pos_d[i + 1, :2] + letter_origin_xy
+            plan.append(("down", p_curr, p_next))
+        return plan
+
     strokes = []
     if word:
-        # Workspace-aware font layout: prevents reaching outside table bounds
-        # and avoids KUKA iiwa base singularity (x < 0.38 m).
         words = word.strip().split()
         raw_strokes = get_word_strokes(word, height=LETTER_HEIGHT)
         all_x = [pt[0] for stroke in raw_strokes for pt in stroke]
@@ -474,7 +592,6 @@ def build_stroke_plan(world, letter_origin_xy, word=None, pattern=None):
         
         max_safe_w = 0.22
         if len(words) > 1 and w > 0.24:
-            # Multi-word phrase that exceeds safe single-line reach: wrap into multiple lines
             line_height = LETTER_HEIGHT * 1.3
             y_offsets = np.linspace((len(words) - 1) * line_height / 2, -(len(words) - 1) * line_height / 2, len(words))
             for w_idx, sub_word in enumerate(words):
@@ -487,16 +604,13 @@ def build_stroke_plan(world, letter_origin_xy, word=None, pattern=None):
                 y_off = y_offsets[w_idx]
                 strokes.extend([[(px, py + y_off) for (px, py) in s] for s in w_strokes])
         elif w > max_safe_w:
-            # Long single word: scale font height to fit reachable table width
             scale_factor = max_safe_w / w
             strokes.extend(get_word_strokes(word, height=LETTER_HEIGHT * scale_factor))
         else:
-            # Standard single word: default height and layout
             strokes.extend(raw_strokes)
 
     if pattern:
         pattern_strokes = generate_pattern(pattern)
-        # Place pattern below the word if word is present, else center it
         offset_y = -0.07 if word else 0.0
         pattern_strokes = [[(px, py + offset_y) for (px, py) in seg] for seg in pattern_strokes]
         strokes.extend(pattern_strokes)
@@ -516,8 +630,8 @@ def build_stroke_plan(world, letter_origin_xy, word=None, pattern=None):
     return plan
 
 
-def run_writing_task(world, ctrl, controller_mode, f_desired, gui=False, save_dir="outputs", tag="writing", word="Robot", pattern=None, live=False):
-    plan = build_stroke_plan(world, world.surface_center_xy, word=word, pattern=pattern)
+def run_writing_task(world, ctrl, controller_mode, f_desired, gui=False, save_dir="outputs", tag="writing", word="Robot", pattern=None, live=False, cursive=False):
+    plan = build_stroke_plan(world, world.surface_center_xy, word=word, pattern=pattern, cursive=cursive)
     adm = AdmittanceController()
 
     drawer = PlatformSurfaceDrawer(world.cid, world.surface_top_z, color=(0.02, 0.02, 0.02), width_m=0.0035, n_strands=7) if gui else None
@@ -831,19 +945,19 @@ def run_part1(save_dir="outputs/part1"):
     plt.savefig(os.path.join(save_dir, "shapes.png"), dpi=150)
     plt.close()
 
-def run_part2_writing(gui=False, save_dir="outputs/part3", f_desired=F_DESIRED, word="Robot", pattern="circle", live=False):
+def run_part2_writing(gui=False, save_dir="outputs/part3", f_desired=F_DESIRED, word="Robot", pattern="circle", live=False, cursive=False):
     print("--- Part 2 (continued): Impedance Writing ---")
     world = build_world(gui=gui)
     ctrl = CartesianImpedanceController(world.arm)
-    s, _ = run_writing_task(world, ctrl, "impedance", f_desired, gui=gui, save_dir=save_dir, tag="part3_impedance", word=word, pattern=pattern, live=live)
+    s, _ = run_writing_task(world, ctrl, "impedance", f_desired, gui=gui, save_dir=save_dir, tag="part3_impedance", word=word, pattern=pattern, live=live, cursive=cursive)
     world.disconnect()
     return s
 
-def run_part2_writing_admittance(gui=False, save_dir="outputs/part4", f_desired=F_DESIRED, word="Robot", pattern="circle", live=False):
+def run_part2_writing_admittance(gui=False, save_dir="outputs/part4", f_desired=F_DESIRED, word="Robot", pattern="circle", live=False, cursive=False):
     print("--- Part 3: Admittance Writing ---")
     world = build_world(gui=gui)
     ctrl = CartesianImpedanceController(world.arm)
-    s, _ = run_writing_task(world, ctrl, "admittance", f_desired, gui=gui, save_dir=save_dir, tag="part4_admittance", word=word, pattern=pattern, live=live)
+    s, _ = run_writing_task(world, ctrl, "admittance", f_desired, gui=gui, save_dir=save_dir, tag="part4_admittance", word=word, pattern=pattern, live=live, cursive=cursive)
     world.disconnect()
     return s
 
@@ -927,14 +1041,17 @@ def main():
     parser.add_argument("--word", type=str, default="Robot", help="Word to write (or 'none')")
     parser.add_argument("--pattern", type=str, default="none", help="Pattern to draw ('circle', 'spiral', 'infinity', 'heart', or 'none')")
     parser.add_argument("--live", action="store_true", help="Enable live dashboard visualization")
+    parser.add_argument("--cursive", action="store_true", help="Enable Fourier descriptor cursive handwriting")
+    parser.add_argument("--fourier", action="store_true", help="Alias for --cursive")
     args = parser.parse_args()
     
     word = None if args.word == "none" else args.word
     pattern = None if args.pattern == "none" else args.pattern
+    cursive = args.cursive or args.fourier
     
     if args.part in ["1", "all"]: run_part1()
-    if args.part in ["2", "all"]: run_part2_writing(gui=args.gui, word=word, pattern=pattern, live=args.live)
-    if args.part in ["3", "all"]: run_part3_admittance(gui=args.gui, word=word, pattern=pattern, live=args.live)
+    if args.part in ["2", "all"]: run_part2_writing(gui=args.gui, word=word, pattern=pattern, live=args.live, cursive=cursive)
+    if args.part in ["3", "all"]: run_part3_admittance(gui=args.gui, word=word, pattern=pattern, live=args.live, cursive=cursive)
     if args.part in ["4", "all"]: run_part4_comparison()
     if args.part in ["5", "all"]: run_part4(gui=args.gui, live=args.live)
 
