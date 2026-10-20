@@ -554,33 +554,126 @@ def evaluate_fourier_trajectory(C_k, freqs_k, T_total=18.0, dt=1.0/240.0):
     return pos_d, vel_d, time_steps
 
 
+def extract_multi_stroke_fourier(text="Robot", num_harmonics=25, font_path="fonts/DancingScript.ttf", center_xy=(0.50, 0.0)):
+    """
+    Extracts multi-stroke cursive handwriting using Fourier Descriptors.
+    Segments vector path into individual stroke contours (MOVETO codes), parameterizes
+    by arc length, computes DFT harmonics C_k, and synthesizes continuous trajectories
+    with peak speed capped strictly <= 0.15 m/s.
+    """
+    prop = FontProperties(fname=font_path) if (font_path and os.path.exists(font_path)) else None
+    path = TextPath((0, 0), text, size=0.045, prop=prop)
+    
+    codes = path.codes
+    vertices = path.vertices
+    
+    vx = vertices[:, 0]
+    vy = vertices[:, 1]
+    w = np.max(vx) - np.min(vx)
+    scale = 0.22 / w if w > 0.22 else 1.0
+    vx = (vx - np.mean(vx)) * scale + center_xy[0]
+    vy = (vy - np.mean(vy)) * scale + center_xy[1]
+    
+    raw_strokes = []
+    curr = []
+    for code, v in zip(codes, np.column_stack([vx, vy])):
+        if code == 1:
+            if len(curr) > 2:
+                raw_strokes.append(np.array(curr))
+            curr = [v]
+        else:
+            curr.append(v)
+    if len(curr) > 2:
+        raw_strokes.append(np.array(curr))
+        
+    fourier_strokes = []
+    for stroke in raw_strokes:
+        diffs = np.diff(stroke, axis=0)
+        seg_lens = np.linalg.norm(diffs, axis=1)
+        total_len = np.sum(seg_lens)
+        if total_len < 0.002:
+            continue
+            
+        cum_len = np.concatenate([[0], np.cumsum(seg_lens)])
+        n_samples = max(int(total_len / 0.0008), 30)
+        s_unif = np.linspace(0, total_len, n_samples)
+        
+        x_unif = np.interp(s_unif, cum_len, stroke[:, 0])
+        y_unif = np.interp(s_unif, cum_len, stroke[:, 1])
+        
+        N = len(x_unif)
+        z = x_unif + 1j * y_unif
+        fft_coeffs = np.fft.fft(z) / N
+        frequencies = np.fft.fftfreq(N) * N
+        
+        M = min(num_harmonics, N // 4)
+        mask = np.abs(frequencies) <= M
+        C_k = fft_coeffs[mask]
+        freqs_k = frequencies[mask]
+        
+        T_seg = max(total_len / 0.05, 0.4)
+        omega = 2.0 * np.pi / T_seg
+        
+        t_test = np.linspace(0, T_seg, 200)
+        exp_test = np.exp(1j * np.outer(t_test, freqs_k * omega))
+        dz_test = exp_test @ ((1j * freqs_k * omega) * C_k)
+        v_max = np.max(np.abs(dz_test))
+        if v_max > 0.14:
+            T_seg = T_seg * (v_max / 0.14)
+            omega = 2.0 * np.pi / T_seg
+            
+        dt = 1.0 / 240.0
+        t_steps = np.arange(0, T_seg, dt)
+        exp_terms = np.exp(1j * np.outer(t_steps, freqs_k * omega))
+        z_rec = exp_terms @ C_k
+        dz_rec = exp_terms @ ((1j * freqs_k * omega) * C_k)
+        
+        pos = np.column_stack([np.real(z_rec), np.imag(z_rec)])
+        vel = np.column_stack([np.real(dz_rec), np.imag(dz_rec)])
+        v_final = np.max(np.linalg.norm(vel, axis=1))
+        
+        fourier_strokes.append(dict(pos=pos, vel=vel, T=T_seg, v_max=v_final, orig=stroke, C_k=C_k, freqs_k=freqs_k))
+        
+    return fourier_strokes
+
+
 def build_stroke_plan(world, letter_origin_xy, word=None, pattern=None, cursive=False):
     # Phase 4: Integration with Controller & Multi-Stroke Planner
     if cursive and word:
-        # Fourier Descriptor Cursive Generation
-        x_pts, y_pts = text_to_points(word, num_points=800)
-        C_k, freqs_k = compute_fourier_coefficients(x_pts, y_pts, num_harmonics=26)
-        pos_d, vel_d, _ = evaluate_fourier_trajectory(C_k, freqs_k, T_total=20.0, dt=DT)
+        fourier_strokes = extract_multi_stroke_fourier(word, num_harmonics=25, center_xy=letter_origin_xy)
         
-        # Phase 5: Verification Checklist - Save plot of reconstructed x(t) vs y(t)
+        # Save verification plot matching user preference
         os.makedirs("outputs", exist_ok=True)
-        fig_v, ax_v = plt.subplots(figsize=(6, 3))
-        ax_v.plot(x_pts + letter_origin_xy[0], y_pts + letter_origin_xy[1], 'r--', alpha=0.35, label="Font Contour")
-        ax_v.plot(pos_d[:, 0] + letter_origin_xy[0], pos_d[:, 1] + letter_origin_xy[1], 'b-', lw=1.8, label="Fourier Reconstructed")
+        fig_v, ax_v = plt.subplots(figsize=(8, 4))
+        for s in fourier_strokes:
+            ax_v.plot(s["orig"][:, 0], s["orig"][:, 1], 'r--', alpha=0.3)
+            ax_v.plot(s["pos"][:, 0], s["pos"][:, 1], 'b-', lw=1.5)
         ax_v.set_aspect("equal")
-        ax_v.set_title(f"Fourier Cursive Trajectory: '{word}' (M=26)", fontsize=11, weight="bold")
-        ax_v.legend(frameon=False, fontsize=8)
+        ax_v.set_title(f"Multi-Stroke Cursive '{word}' with Fourier Descriptors")
         fig_v.tight_layout()
         fig_v.savefig("outputs/fourier_verification.png", dpi=150)
         plt.close(fig_v)
         
-        # State machine: AIR_TRAVEL -> APPROACH -> WRITE -> LIFT
-        first_pt = pos_d[0, :2] + letter_origin_xy
-        plan = [("up", world.pre_contact_pos[:2], first_pt)]
-        for i in range(len(pos_d) - 1):
-            p_curr = pos_d[i, :2] + letter_origin_xy
-            p_next = pos_d[i + 1, :2] + letter_origin_xy
-            plan.append(("down", p_curr, p_next))
+        # Multi-stroke trajectory routing: AIR_TRAVEL (up) -> APPROACH -> WRITE (down)
+        plan = []
+        prev_end = world.pre_contact_pos[:2]
+        for s in fourier_strokes:
+            pos = s["pos"]
+            diffs = np.diff(pos, axis=0)
+            ds = np.linalg.norm(diffs, axis=1)
+            cum_s = np.concatenate([[0], np.cumsum(ds)])
+            tot_s = cum_s[-1]
+            n_wpt = max(8, min(int(tot_s / 0.0025), 25))
+            s_eval = np.linspace(0, tot_s, n_wpt)
+            wx = np.interp(s_eval, cum_s, pos[:, 0])
+            wy = np.interp(s_eval, cum_s, pos[:, 1])
+            wpts = np.column_stack([wx, wy])
+            
+            plan.append(("up", prev_end, wpts[0]))
+            for i in range(len(wpts) - 1):
+                plan.append(("down", wpts[i], wpts[i+1]))
+            prev_end = wpts[-1]
+            
         return plan
 
     strokes = []
