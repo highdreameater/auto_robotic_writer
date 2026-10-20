@@ -495,8 +495,16 @@ def run_writing_task(world, ctrl, controller_mode, f_desired, gui=False, save_di
     t = 0.0
     for step in range(int(APPROACH_DURATION / DT)):
         pos_des, _ = traj_in.eval(t)
-        tau, _ = ctrl.step(pos_des, world.nominal_quat, GAINS_PEN_UP["K_trans"], GAINS_PEN_UP["K_rot"], GAINS_PEN_UP["damping_ratio"])
-        world.arm.apply_joint_torques(tau)
+        if controller_mode == "admittance":
+            q_cmd = world.arm.inverse_kinematics(pos_des, world.nominal_quat)
+            p.setJointMotorControlArray(
+                world.arm.robot_id, world.arm.joint_indices,
+                controlMode=p.POSITION_CONTROL, targetPositions=list(q_cmd),
+                forces=[200.0] * world.arm.n_joints, physicsClientId=world.cid
+            )
+        else:
+            tau, _ = ctrl.step(pos_des, world.nominal_quat, GAINS_PEN_UP["K_trans"], GAINS_PEN_UP["K_rot"], GAINS_PEN_UP["damping_ratio"])
+            world.arm.apply_joint_torques(tau)
         p.stepSimulation(physicsClientId=world.cid)
         world.arm.clamp_joint_velocities()
         if gui and step % 2 == 0:
@@ -515,8 +523,16 @@ def run_writing_task(world, ctrl, controller_mode, f_desired, gui=False, save_di
             traj = MinJerkTrajectory(p_from, p_to, PEN_UP_DURATION)
             for step in range(int(PEN_UP_DURATION / DT)):
                 pos_des, _ = traj.eval(step * DT)
-                tau, _ = ctrl.step(pos_des, world.nominal_quat, GAINS_PEN_UP["K_trans"], GAINS_PEN_UP["K_rot"], GAINS_PEN_UP["damping_ratio"])
-                world.arm.apply_joint_torques(tau)
+                if controller_mode == "admittance":
+                    q_cmd = world.arm.inverse_kinematics(pos_des, world.nominal_quat)
+                    p.setJointMotorControlArray(
+                        world.arm.robot_id, world.arm.joint_indices,
+                        controlMode=p.POSITION_CONTROL, targetPositions=list(q_cmd),
+                        forces=[200.0] * world.arm.n_joints, physicsClientId=world.cid
+                    )
+                else:
+                    tau, _ = ctrl.step(pos_des, world.nominal_quat, GAINS_PEN_UP["K_trans"], GAINS_PEN_UP["K_rot"], GAINS_PEN_UP["damping_ratio"])
+                    world.arm.apply_joint_torques(tau)
                 p.stepSimulation(physicsClientId=world.cid)
                 world.arm.clamp_joint_velocities()
                 if gui and step % 2 == 0:
@@ -535,8 +551,16 @@ def run_writing_task(world, ctrl, controller_mode, f_desired, gui=False, save_di
                 traj_app = MinJerkTrajectory(np.array([xy_from[0], xy_from[1], z_start]), np.array([xy_from[0], xy_from[1], z_end]), 0.15)
                 for step in range(int(0.15 / DT)):
                     pos_des, _ = traj_app.eval(step * DT)
-                    tau, _ = ctrl.step(pos_des, world.nominal_quat, GAINS_PEN_UP["K_trans"], GAINS_PEN_UP["K_rot"], GAINS_PEN_UP["damping_ratio"])
-                    world.arm.apply_joint_torques(tau)
+                    if controller_mode == "admittance":
+                        q_cmd = world.arm.inverse_kinematics(pos_des, world.nominal_quat)
+                        p.setJointMotorControlArray(
+                            world.arm.robot_id, world.arm.joint_indices,
+                            controlMode=p.POSITION_CONTROL, targetPositions=list(q_cmd),
+                            forces=[200.0] * world.arm.n_joints, physicsClientId=world.cid
+                        )
+                    else:
+                        tau, _ = ctrl.step(pos_des, world.nominal_quat, GAINS_PEN_UP["K_trans"], GAINS_PEN_UP["K_rot"], GAINS_PEN_UP["damping_ratio"])
+                        world.arm.apply_joint_torques(tau)
                     p.stepSimulation(physicsClientId=world.cid)
                     world.arm.clamp_joint_velocities()
                     if gui and step % 2 == 0:
@@ -552,13 +576,29 @@ def run_writing_task(world, ctrl, controller_mode, f_desired, gui=False, save_di
                 f_meas_z = force[2]
 
                 if controller_mode == "admittance":
+                    # ----------------------------------------------------------
+                    # TODO 3: Admittance Control Outer Loop (Position Control)
+                    # ----------------------------------------------------------
+                    # 1. Measured force F_meas read live from contact points
+                    # 2. Delta F = F_meas - 5.0 drives 2nd order mass-damper ODE
+                    # 3. Admittance integration updates z_c over time
+                    # 4. Target position pos_des fed to calculateInverseKinematics
+                    # 5. Actuation via POSITION_CONTROL
                     xc = adm.step(f_meas_z, f_desired, DT)
-                    z_des = world.surface_top_z + TOOL_RADIUS - ADMITTANCE_NOMINAL_PENETRATION + xc
-                    gains = GAINS_INNER_STIFF
+                    z_des = world.surface_top_z + TOOL_RADIUS + xc
+                    pos_des = np.array([xy_pos[0], xy_pos[1], z_des])
+                    q_cmd = world.arm.inverse_kinematics(pos_des, world.nominal_quat)
+                    p.setJointMotorControlArray(
+                        world.arm.robot_id,
+                        world.arm.joint_indices,
+                        controlMode=p.POSITION_CONTROL,
+                        targetPositions=list(q_cmd),
+                        forces=[200.0] * world.arm.n_joints,
+                        physicsClientId=world.cid,
+                    )
                 else:
                     # ----------------------------------------------------------
-                    # TODO 2 (continued): Impedance Writing
-                    # Write the logic to achieve the desired 5N contact force.
+                    # TODO 2 (continued): Impedance Writing (TORQUE_CONTROL)
                     # ----------------------------------------------------------
                     # High in-plane (x, y) stiffness preserves sharp geometric strokes against friction;
                     # Compliant normal (z) stiffness renders the desired 5N contact force via series deflection.
@@ -569,10 +609,10 @@ def run_writing_task(world, ctrl, controller_mode, f_desired, gui=False, save_di
                     )
                     delta_z = f_desired / 125.0
                     z_des = world.surface_top_z + TOOL_RADIUS - delta_z
+                    pos_des = np.array([xy_pos[0], xy_pos[1], z_des])
+                    tau, _ = ctrl.step(pos_des, world.nominal_quat, gains["K_trans"], gains["K_rot"], gains["damping_ratio"])
+                    world.arm.apply_joint_torques(tau)
 
-                pos_des = np.array([xy_pos[0], xy_pos[1], z_des])
-                tau, _ = ctrl.step(pos_des, world.nominal_quat, gains["K_trans"], gains["K_rot"], gains["damping_ratio"])
-                world.arm.apply_joint_torques(tau)
                 p.stepSimulation(physicsClientId=world.cid)
                 world.arm.clamp_joint_velocities()
                 if gui and step % 2 == 0:
