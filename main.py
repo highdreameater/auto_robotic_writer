@@ -600,24 +600,34 @@ def run_writing_task(world, ctrl, controller_mode, f_desired, gui=False, save_di
     
     # --------------------------------------------------------------------------
     # TODO 4: Compute Metrics
-    # Compute force tracking RMSE (only when f_des > 0) and path smoothness (mean squared jerk).
+    # Compute force tracking RMSE and MAE across active contact set S = {k | F_meas[k] >= 0.5 N}
+    # (filtering out non-contact free-air approach samples) and path smoothness (mean squared jerk).
     # Store them in variables named `rmse` and `smoothness`.
     # --------------------------------------------------------------------------
-    contact_mask = arr["force_des"] > 0
+    f_meas = arr["force"][:, 2]
+    contact_mask = (arr["force_des"] > 0) & (f_meas >= 0.5)
     if np.any(contact_mask):
-        f_act = arr["force"][contact_mask, 2]
+        f_act = f_meas[contact_mask]
         f_ref = arr["force_des"][contact_mask]
         rmse = float(np.sqrt(np.mean((f_act - f_ref) ** 2)))
+        mae = float(np.mean(np.abs(f_act - f_ref)))
     else:
         rmse = 0.0
+        mae = 0.0
     smoothness = logger.path_smoothness()
     
     plot_force_tracking(arr, os.path.join(save_dir, f"{tag}_force_tracking.png"), title=f"{tag}: Force Tracking While Writing")
     plot_xy_path(arr, os.path.join(save_dir, f"{tag}_xy_path.png"), title=f"{tag}: Traced Path (top-down)")
     
-    summary = dict(force_tracking_rmse_N=rmse, path_smoothness_jerk2=smoothness, wall_clock_time_s=logger.wall_clock_time(), sim_time_s=float(arr["t"][-1]))
+    summary = dict(
+        force_tracking_rmse_N=rmse,
+        force_tracking_mae_N=mae,
+        path_smoothness_jerk2=smoothness,
+        wall_clock_time_s=logger.wall_clock_time(),
+        sim_time_s=float(arr["t"][-1])
+    )
     save_json(os.path.join(save_dir, f"{tag}_summary.json"), summary)
-    print(f"[{tag}] force RMSE = {rmse:.3f} N")
+    print(f"[{tag}] force RMSE = {rmse:.3f} N, MAE = {mae:.3f} N")
     return summary, arr
 
 
@@ -741,9 +751,25 @@ def run_part4_comparison(save_dir="outputs/part5"):
     s3 = run_part2_writing(gui=False)
     s4 = run_part3_admittance(gui=False)
     
+    # Print formatted performance comparison table
+    print("\n" + "=" * 70)
+    print("           CONTROLLER FORCE TRACKING PERFORMANCE COMPARISON")
+    print("=" * 70)
+    print(f"{'Metric':<32} | {'Impedance (Part 2)':<16} | {'Admittance (Part 3)':<16}")
+    print("-" * 70)
+    print(f"{'Force RMSE (N)':<32} | {s3['force_tracking_rmse_N']:<16.3f} | {s4['force_tracking_rmse_N']:<16.3f}")
+    print(f"{'Force MAE (N)':<32} | {s3.get('force_tracking_mae_N', 0.0):<16.3f} | {s4.get('force_tracking_mae_N', 0.0):<16.3f}")
+    print(f"{'Path Smoothness (mean sq jerk)':<32} | {s3['path_smoothness_jerk2']:<16.2e} | {s4['path_smoothness_jerk2']:<16.2e}")
+    print(f"{'Execution Sim Time (s)':<32} | {s3['sim_time_s']:<16.2f} | {s4['sim_time_s']:<16.2f}")
+    print("=" * 70 + "\n")
+    
     dynamic_cmp = {"Impedance (Part 2)": s3, "Admittance (Part 3)": s4}
-    bar_compare(["Force RMSE (N)"], {k: [v["force_tracking_rmse_N"]] for k, v in dynamic_cmp.items()}, "RMSE (N)", os.path.join(save_dir, "part5_writing_force_rmse.png"), "Writing: Force Tracking RMSE")
+    bar_compare(["Force RMSE (N)", "Force MAE (N)"], {k: [v["force_tracking_rmse_N"], v.get("force_tracking_mae_N", 0.0)] for k, v in dynamic_cmp.items()}, "Force Error (N)", os.path.join(save_dir, "part5_writing_force_rmse.png"), "Writing: Force Tracking Error")
     bar_compare(["Path Smoothness (mean sq. jerk)"], {k: [v["path_smoothness_jerk2"]] for k, v in dynamic_cmp.items()}, "Mean squared jerk", os.path.join(save_dir, "part5_writing_smoothness.png"), "Writing: Motion Smoothness")
+    save_json(os.path.join(save_dir, "part5_comparison_summary.json"), dict(
+        impedance=s3,
+        admittance=s4
+    ))
 
 def run_part3(*args, **kwargs):
     # Support both comparison call and admittance writing call for external compatibility
