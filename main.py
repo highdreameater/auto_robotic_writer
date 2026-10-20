@@ -392,28 +392,29 @@ class PlatformSurfaceDrawer:
             dist = np.sqrt(dist_sq)
             normal = np.array([-dy / dist, dx / dist, 0.0])
             curr_strand_pts = [curr_pt + normal * off for off in self.offsets]
+            prev_strand_pts = [self.last_pt + normal * off for off in self.offsets]
             
-            if self.last_strand_pts is not None:
-                # Longitudinal continuous strands
-                for p_prev, p_curr in zip(self.last_strand_pts, curr_strand_pts):
-                    p.addUserDebugLine(
-                        p_prev.tolist(),
-                        p_curr.tolist(),
-                        lineColorRGB=list(self.color),
-                        lineWidth=1.5,
-                        lifeTime=0,
-                        physicsClientId=self.cid,
-                    )
-                # Diagonal cross-hatch fill to eliminate any gaps between strands on sharp turns
-                for i in range(len(curr_strand_pts) - 1):
-                    p.addUserDebugLine(
-                        self.last_strand_pts[i].tolist(),
-                        curr_strand_pts[i + 1].tolist(),
-                        lineColorRGB=list(self.color),
-                        lineWidth=1.0,
-                        lifeTime=0,
-                        physicsClientId=self.cid,
-                    )
+            p_starts = self.last_strand_pts if self.last_strand_pts is not None else prev_strand_pts
+            # Longitudinal continuous strands
+            for p_prev, p_curr in zip(p_starts, curr_strand_pts):
+                p.addUserDebugLine(
+                    p_prev.tolist(),
+                    p_curr.tolist(),
+                    lineColorRGB=list(self.color),
+                    lineWidth=1.5,
+                    lifeTime=0,
+                    physicsClientId=self.cid,
+                )
+            # Diagonal cross-hatch fill to eliminate any gaps between strands on sharp turns
+            for i in range(len(curr_strand_pts) - 1):
+                p.addUserDebugLine(
+                    p_starts[i].tolist(),
+                    curr_strand_pts[i + 1].tolist(),
+                    lineColorRGB=list(self.color),
+                    lineWidth=1.0,
+                    lifeTime=0,
+                    physicsClientId=self.cid,
+                )
             self.last_strand_pts = curr_strand_pts
         else:
             self.last_strand_pts = None
@@ -464,8 +465,11 @@ def build_stroke_plan(world, letter_origin_xy, word=None, pattern=None):
         pts = [np.array(letter_origin_xy) + np.array(pt) for pt in stroke]
         for i in range(len(pts)):
             if i == 0:
-                if plan: plan.append(("up", plan[-1][2], pts[0]))
-                else:    plan.append(("up", world.pre_contact_pos[:2], pts[0]))
+                if plan:
+                    if not np.allclose(plan[-1][2], pts[0], atol=1e-3):
+                        plan.append(("up", plan[-1][2], pts[0]))
+                else:
+                    plan.append(("up", world.pre_contact_pos[:2], pts[0]))
             if i < len(pts) - 1:
                 plan.append(("down", pts[i], pts[i+1]))
     return plan
@@ -583,8 +587,6 @@ def run_writing_task(world, ctrl, controller_mode, f_desired, gui=False, save_di
                 if drawer is not None:
                     drawer.update(tool_pos)
                 t += DT
-        if drawer is not None:
-            drawer.pen_up()
         prev_kind = kind
     
     logger.stop_timer()
