@@ -1,0 +1,26 @@
+{
+  "accuracy": 1.0,
+  "results": {
+    "sample_A": {
+      "true_stiffness_N_per_m": 300,
+      "estimated_stiffness_N_per_m": 301.7016367776262,
+      "true_label": "soft",
+      "predicted_label": "soft",
+      "correct": true
+    },
+    "sample_B": {
+      "true_stiffness_N_per_m": 1200,
+      "estimated_stiffness_N_per_m": 1208.4016659094266,
+      "true_label": "medium",
+      "predicted_label": "medium",
+      "correct": true
+    },
+    "sample_C": {
+      "true_stiffness_N_per_m": 4000,
+      "estimated_stiffness_N_per_m": 4137.084048373322,
+      "true_label": "hard",
+      "predicted_label": "hard",
+      "correct": true
+    }
+  }
+}

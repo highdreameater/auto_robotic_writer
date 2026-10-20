@@ -1,0 +1,7 @@
+{
+  "force_tracking_rmse_N": 0.3570603002969562,
+  "force_tracking_mae_N": 0.07101702599047152,
+  "path_smoothness_jerk2": 10934638057.747932,
+  "wall_clock_time_s": 6.5073211249982705,
+  "sim_time_s": 54.54899999996357
+}

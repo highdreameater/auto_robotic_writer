@@ -6,8 +6,7 @@ __pycache__/
 venv/
 env/
 
-# Output files (students generate these themselves)
-outputs/
+# Output files
 *.log
 
 # macOS
