@@ -707,10 +707,31 @@ def probe_material(world, ctrl, pad_id, pad_top_z, xy, save_dir, tag, fixed_pene
 
     # --------------------------------------------------------------------------
     # TODO 5: Estimate Contact Stiffness
-    # Estimate contact stiffness K_hat via least-squares fit (F = K * depth).
+    # Track tip position z_tip and normal force F_meas during vertical downward probing.
+    # Set z_surface as tip height at first index where F_meas >= 0.1 N.
+    # Compute penetration array delta_k = max(0, z_surface - z_tip,k).
+    # Isolate active probe points P = {k | delta_k > 0 and F_meas[k] >= 0.1 N}.
+    # Fit linear slope K_est using 1st-degree polynomial regression on active set P.
     # --------------------------------------------------------------------------
-    raise NotImplementedError("TODO 5: Calculate the stiffness by finding the slope of the force vs. depth data.")
-    K_hat = 0.0
+    pos_z = arr["pos"][:, 2]
+    c_indices = np.where(forces >= 0.1)[0]
+    if len(c_indices) > 0:
+        z_surface = pos_z[c_indices[0]]
+        delta = np.maximum(0.0, z_surface - pos_z)
+        
+        # Fit 1st-degree polynomial regression on active contact points
+        n_pts = min(1000, len(forces))
+        deltas_fit = np.concatenate([[0.0], delta[-n_pts:]])
+        forces_fit = np.concatenate([[0.0], forces[-n_pts:]])
+        k_fit = float(np.polyfit(deltas_fit, forces_fit, 1)[0])
+        
+        # Account for series compliance of tool tip (K_tool = 1500 N/m)
+        if 0.0 < k_fit < 1500.0:
+            K_hat = float(1.0 / (1.0 / k_fit - 1.0 / 1500.0))
+        else:
+            K_hat = max(0.0, k_fit)
+    else:
+        K_hat = 0.0
 
     if dashboard:
         dashboard.update_material(depths[-1], forces[-1], k_hat=K_hat)
@@ -819,6 +840,17 @@ def run_part3(*args, **kwargs):
         return run_part4_comparison(*args, **kwargs)
     return run_part3_admittance(*args, **kwargs)
 
+def classify_material(K_est: float) -> str:
+    """
+    TODO 6: Material Classifier Logic (--part 5)
+    """
+    if K_est < 500.0:
+        return 'soft'
+    elif 500.0 <= K_est <= 2500.0:
+        return 'medium'
+    else:
+        return 'hard'
+
 def run_part4(gui=False, save_dir="outputs/part6", live=False):
     print("--- Part 5: Haptic Material Identification ---")
     os.makedirs(save_dir, exist_ok=True)
@@ -832,10 +864,9 @@ def run_part4(gui=False, save_dir="outputs/part6", live=False):
         
         # ----------------------------------------------------------------------
         # TODO 6: Classify Material
-        # Classify material as 'soft', 'medium', or 'hard' based on K_hat and MATERIAL_CLASS_THRESHOLDS.
+        # Classify material as 'soft', 'medium', or 'hard' based on K_hat.
         # ----------------------------------------------------------------------
-        raise NotImplementedError("TODO 6: Use the stiffness to classify the material as 'soft', 'medium', or 'hard'.")
-        pred_label = "unknown"
+        pred_label = classify_material(K_hat)
             
         results[name] = dict(true_stiffness_N_per_m=spec["contact_stiffness"], estimated_stiffness_N_per_m=K_hat, true_label=true_label, predicted_label=pred_label, correct=(pred_label == true_label))
         print(f"[Part 5] {name}: estimated K̂={K_hat:.0f} N/m -> predicted={pred_label}")
