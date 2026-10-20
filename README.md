@@ -1,5 +1,8 @@
 ## Assignment 2: Force-Controlled Writing & Haptic Material Identification
 
+> [!NOTE]
+> **Complete Technical Submission Report**: See [SUBMISSION_README.md](SUBMISSION_README.md) for the detailed mathematical derivations, design decisions, bug fixes, benchmark comparison tables, and Fourier Cursive handwriting deep-dive.
+
 ## Overview:
 The goal of this assignment is to implement and evaluate two fundamental force control strategies—Cartesian Impedance Control and Admittance Control—for a robotic manipulator in simulation. You will use these controllers to perform force-controlled writing and trace geometric patterns (acting like a compliant pen). Finally, you will perform haptic material identification (estimating the stiffness of unknown surfaces by pressing into them).
 
